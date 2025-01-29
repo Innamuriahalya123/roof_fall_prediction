@@ -1,0 +1,93 @@
+# Import necessary libraries
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, median_absolute_error
+
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Input, LSTM, Dense, Dropout, BatchNormalization
+from tensorflow.keras.callbacks import EarlyStopping
+
+# Load the dataset
+data = pd.read_csv('/content/capstone.csv')
+
+X = data.drop('Roof Fall Rate', axis=1)
+X = data.drop('S.no', axis=1)
+y = data['Roof Fall Rate']
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=64)
+
+# Standardize the features
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+# Reshape the data for LSTM input
+# LSTM expects input in the shape (samples, timesteps, features)
+X_train_lstm = X_train.reshape(X_train.shape[0], 1, X_train.shape[1])
+X_test_lstm = X_test.reshape(X_test.shape[0], 1, X_test.shape[1])
+
+# Build the LSTM model
+lstm_model = Sequential([
+    Input(shape=(X_train_lstm.shape[1], X_train_lstm.shape[2])),
+    LSTM(128, return_sequences=True),  # First LSTM layer with sequences
+    BatchNormalization(),  # Normalize outputs of the first LSTM layer
+    Dropout(0.3),  # Dropout layer
+    LSTM(64, return_sequences=True),  # Second LSTM layer with sequences
+    BatchNormalization(),  # Normalize outputs of the second LSTM layer
+    Dropout(0.3),  # Dropout layer
+    LSTM(32),  # Third LSTM layer
+    Dropout(0.3),  # Dropout layer
+    Dense(16, activation='relu'),  # Dense layer
+    Dense(1)  # Output layer for regression
+])
+
+# Compile the model
+from tensorflow.keras.optimizers import Adam  # Importing Adam optimizer
+from tensorflow.keras.losses import Huber  # Importing Huber loss
+optimizer = Adam(learning_rate=0.001)
+lstm_model.compile(optimizer=optimizer, loss=Huber(delta=1.0), metrics=['mae'])
+
+# Implement early stopping
+early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+
+# Train the model
+lstm_model.fit(X_train_lstm, y_train, epochs=1000, validation_split=0.3, batch_size=32, callbacks=[early_stopping])
+
+# Make predictions on the entire test set at once
+y_pred = lstm_model.predict(X_test_lstm, batch_size=32)
+
+# Calculate and print the Mean Absolute Error
+mae = mean_absolute_error(y_test, y_pred)
+print(f"Mean Absolute Error of Predictions: {mae}")
+
+# Calculate and print the Mean Squared Error
+mse = mean_squared_error(y_test, y_pred)
+print(f"Mean Squared Error of Predictions: {mse}")
+
+# Calculate and print the Root Mean Squared Error
+rmse = np.sqrt(mse)
+print(f"Root Mean Squared Error of Predictions: {rmse}")
+
+# Calculate and print the R-squared score
+r2 = r2_score(y_test, y_pred)
+print(f"R-squared Score: {r2}")
+
+# Calculate and print the Normalized Root Mean Squared Error
+nrmse = rmse / (y_test.max() - y_test.min())
+print(f"Normalized Root Mean Squared Error of Predictions: {nrmse}")
+
+variance = np.var(y_test)  # Variance of the original target variable
+nmse = mse / variance  # Normalized MSE
+print(f'Normalized MSE (nMSE): {nmse:.4f}')
+
+# Calculate and print the Mean Absolute Percentage Error (MAPE)
+mape = np.mean(np.abs((y_test - y_pred.flatten()) / y_test)) * 100
+print(f"Mean Absolute Percentage Error (MAPE): {mape:.4f}%")
+
+# Calculate and print the Median Absolute Deviation (MAD)
+mad = np.median(np.abs(y_test - y_pred.flatten()))
+print(f"Median Absolute Deviation (MAD): {mad:.4f}")
