@@ -1,0 +1,93 @@
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+
+# Load dataset
+dataset = pd.read_csv("/content/capstone.csv")
+
+# Define feature set and target variable
+X = dataset.drop('Roof Fall Rate', axis=1)
+X = X.drop('S.no', axis=1)
+y = dataset['Roof Fall Rate']
+
+# Scale features
+scaler_X = StandardScaler()
+X = scaler_X.fit_transform(X)
+
+# Scale target variable
+scaler_y = StandardScaler()
+y = scaler_y.fit_transform(y.values.reshape(-1, 1)).flatten()  # Flatten for LSTM input
+
+# Reshape input for LSTM [samples, time steps, features]
+X = X.reshape(X.shape[0], 1, X.shape[1])  # Adding time step dimension
+
+# Split data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=64)
+
+# Build the LSTM and Attention model
+class AttentionLayer(layers.Layer):
+    def __init__(self):
+        super(AttentionLayer, self).__init__()
+
+    def call(self, inputs):
+        attention = tf.nn.softmax(inputs, axis=1)
+        context = tf.reduce_sum(attention * inputs, axis=1)
+        return context
+
+# Define the hybrid model
+def create_model(input_shape):
+    inputs = layers.Input(shape=input_shape)
+    lstm_out = layers.LSTM(64, return_sequences=True)(inputs)
+    attention_out = AttentionLayer()(lstm_out)
+    dense_out = layers.Dense(32, activation='relu')(attention_out)
+    outputs = layers.Dense(1)(dense_out)
+
+    model = keras.Model(inputs, outputs)
+    return model
+
+# Create and compile the model
+input_shape = (X_train.shape[1], X_train.shape[2])  # (timesteps, features)
+model = create_model(input_shape)
+model.compile(optimizer='adam', loss='mean_squared_error', metrics=['mean_squared_error'])
+
+# Train the model
+model.fit(X_train, y_train, epochs=1000, batch_size=32, validation_split=0.2)
+
+# Predict on the test set
+y_pred = model.predict(X_test)
+
+# Rescale predictions back to the original scale
+y_pred_rescaled = scaler_y.inverse_transform(y_pred.reshape(-1, 1))
+
+# Calculate metrics
+y_test_rescaled = scaler_y.inverse_transform(y_test.reshape(-1, 1))  # Rescale the actual test values
+mse = mean_squared_error(y_test_rescaled, y_pred_rescaled)
+mae = mean_absolute_error(y_test_rescaled, y_pred_rescaled)
+rmse = np.sqrt(mse)
+r2 = r2_score(y_test_rescaled, y_pred_rescaled)
+
+# Mean Absolute Deviation (MAD)
+mad = np.mean(np.abs(y_test_rescaled - np.mean(y_test_rescaled)))
+
+# Mean Absolute Percentage Error (MAPE)
+mape = np.mean(np.abs((y_test_rescaled - y_pred_rescaled) / y_test_rescaled)) * 100
+
+# Calculate Normalized Root Mean Squared Error (NRMSE)
+nrmse = rmse / (y_test_rescaled.max() - y_test_rescaled.min())
+variance = np.var(y_test_rescaled)  # Variance of the original target variable
+nmse = mse / variance  # Normalized MSE
+
+# Output results
+print("R^2 score (LSTM with Attention):", r2)
+print("Mean Squared Error (MSE):", mse)
+print("Mean Absolute Error (MAE):", mae)
+print("Mean Absolute Deviation (MAD):", mad)
+print("Mean Absolute Percentage Error (MAPE):", mape)
+print("Root Mean Squared Error (RMSE):", rmse)
+print("Normalized Root Mean Squared Error (NRMSE):", nrmse)
+print(f'Normalized MSE (nMSE): {nmse:.4f}')
