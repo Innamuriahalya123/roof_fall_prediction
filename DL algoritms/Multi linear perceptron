@@ -1,0 +1,118 @@
+# Import necessary libraries
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+
+# Load the dataset
+data = pd.read_csv('capstone.csv')
+
+# Define X and y, then drop 'Roof Fall Rate' and 'S.no' from X
+X = data.drop(columns=['Roof Fall Rate', 'S.no'])
+y = data['Roof Fall Rate']  # Define the target variable
+
+# Split data into training and test sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=64)
+
+# Scale the feature data
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+# Normalize the target variable using Min-Max Scaling
+y_scaler = MinMaxScaler()
+y_train_normalized = y_scaler.fit_transform(y_train.values.reshape(-1, 1))  # Scale training target
+y_test_normalized = y_scaler.transform(y_test.values.reshape(-1, 1))  # Scale test target
+
+# Convert data to PyTorch tensors and create a TensorDataset for training
+X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
+y_train_tensor = torch.tensor(y_train_normalized, dtype=torch.float32)
+train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
+
+# Define the neural network model
+class CapstoneMLP(nn.Module):
+    def __init__(self, input_dim, output_dim, hidden_dim=256):
+        super(CapstoneMLP, self).__init__()
+        self.hidden = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU()
+        )
+        self.output_layer = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x):
+        return self.output_layer(self.hidden(x))
+
+# Set hyperparameters
+input_dim = X_train.shape[1]
+output_dim = 1
+batch_size = 32
+learning_rate = 0.01
+num_epochs = 2000
+
+# Initialize model and optimizer
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = CapstoneMLP(input_dim, output_dim).to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+criterion = nn.SmoothL1Loss()  # Huber loss
+
+# Create DataLoader for training
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+# Training loop
+print(f'\nTraining with Huber Loss:')
+for epoch in range(num_epochs):
+    model.train()
+    epoch_losses = []
+    for features, targets in train_loader:
+        features, targets = features.to(device), targets.to(device)
+        optimizer.zero_grad()
+        output = model(features)
+        loss = criterion(output.view(-1), targets.view(-1))
+        loss.backward()
+        optimizer.step()
+        epoch_losses.append(loss.item())
+    if epoch % 100 == 0:  # Log every 100 epochs
+        print(f'Epoch {epoch}, Loss: {np.mean(epoch_losses):.4f}')
+
+# Test the model and calculate metrics
+model.eval()
+with torch.no_grad():
+    X_test_tensor = torch.tensor(X_test, dtype=torch.float32).to(device)
+    y_pred_normalized = model(X_test_tensor).view(-1).cpu().numpy()  # Predict normalized values
+    y_pred = y_scaler.inverse_transform(y_pred_normalized.reshape(-1, 1))  # Inverse scaling
+    y_test_original = y_scaler.inverse_transform(y_test_normalized)  # Inverse scaling of test target
+
+# Calculate evaluation metrics
+mse = mean_squared_error(y_test_original, y_pred)
+rmse = np.sqrt(mse)
+r2 = r2_score(y_test_original, y_pred)
+mae = mean_absolute_error(y_test_original, y_pred)
+nrmse = rmse / (y_test_original.max() - y_test_original.min())
+variance = np.var(y_test_original)  # Variance of the original target variable
+nmse = mse / variance  # Normalized MSE
+
+# Calculate MAD (Mean Absolute Deviation)
+mad = np.mean(np.abs(y_test_original - y_pred))
+
+# Calculate MAPE (Mean Absolute Percentage Error)
+mape = np.mean(np.abs((y_test_original - y_pred) / y_test_original)) * 100
+
+# Print the metrics
+print(f'\nEvaluation Metrics:')
+print(f'RMSE: {rmse:.4f}')
+print(f'MSE: {mse:.4f}')
+print(f'R²: {r2:.4f}')
+print(f'MAE: {mae:.4f}')
+print(f'NRMSE: {nrmse:.4f}')
+print(f'Normalized MSE (nMSE): {nmse:.4f}')
+print(f'MAD: {mad:.4f}')
+print(f'MAPE: {mape:.4f}%')
+
