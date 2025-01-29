@@ -1,0 +1,131 @@
+# Import necessary libraries
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+
+# Load the dataset
+data = pd.read_csv('capstone.csv')
+
+X = data.drop('Roof Fall Rate', axis=1)
+X=data.drop('S.no',axis=1)
+y = data['Roof Fall Rate']
+
+# Split data into training and test sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=5)
+
+# Scale the feature data
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+# Convert data to PyTorch tensors and create a TensorDataset for training
+X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
+y_train_tensor = torch.tensor(y_train.values, dtype=torch.float32)  # Keep this line for y_train
+train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
+
+# Define the hybrid LSTM-RNN model
+class HybridLSTM_RNN(nn.Module):
+    def __init__(self, input_dim, output_dim, lstm_units=50, rnn_units=50, hidden_dim=256):
+        super(HybridLSTM_RNN, self).__init__()
+        # LSTM layer
+        self.lstm = nn.LSTM(input_dim, lstm_units, batch_first=True)
+        # RNN layer
+        self.rnn = nn.RNN(lstm_units, rnn_units, batch_first=True)
+        # Fully connected layers
+        self.hidden = nn.Sequential(
+            nn.Linear(rnn_units, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU()
+        )
+        self.output_layer = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x):
+        # LSTM layer
+        lstm_out, _ = self.lstm(x)
+        # RNN layer (we take the last output from the LSTM)
+        rnn_out, _ = self.rnn(lstm_out)
+        # Pass through the fully connected layers
+        x = self.hidden(rnn_out[:, -1, :])  # Use the last output from RNN layer
+        return self.output_layer(x)
+
+# Set hyperparameters
+input_dim = X_train.shape[1]
+output_dim = 1
+batch_size = 32
+learning_rate = 0.01
+num_epochs = 1000
+seq_length = 1  # Since your data is already in a tabular format, treat each row as a sequence of length 1
+
+# Initialize model and optimizer
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Use Huber loss
+criterion = nn.SmoothL1Loss()  # Huber loss
+
+# Create DataLoader for training
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+# Initialize the model for training
+model = HybridLSTM_RNN(input_dim, output_dim).to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+# Training loop
+print(f'\nTraining with Hybrid LSTM-RNN Model:')
+for epoch in range(num_epochs):
+    model.train()
+    epoch_losses = []
+    for features, targets in train_loader:
+        features, targets = features.to(device), targets.to(device)
+        # Reshape the input data to match LSTM input format (batch_size, sequence_length, features)
+        features = features.unsqueeze(1)  # Adding sequence dimension
+        optimizer.zero_grad()
+        output = model(features)
+        loss = criterion(output.view(-1), targets)
+        loss.backward()
+        optimizer.step()
+        epoch_losses.append(loss.item())
+    if epoch % 50 == 0:
+        print(f'Epoch {epoch}, Loss: {np.mean(epoch_losses):.4f}')
+
+# Test the model and calculate metrics
+model.eval()
+with torch.no_grad():
+    # Use X_test instead of X_train for testing
+    X_test_tensor = torch.tensor(X_test, dtype=torch.float32).to(device)
+    y_test_tensor = torch.tensor(y_test.values, dtype=torch.float32).to(device)
+    # Reshape the input data to match LSTM input format (batch_size, sequence_length, features)
+    X_test_tensor = X_test_tensor.unsqueeze(1)  # Adding sequence dimension
+    y_pred = model(X_test_tensor).view(-1).cpu().numpy()
+    y_test = y_test_tensor.cpu().numpy()  # Convert to NumPy array
+
+# Calculate evaluation metrics
+rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+mse = mean_squared_error(y_test, y_pred)
+r2 = r2_score(y_test, y_pred)
+mae = mean_absolute_error(y_test, y_pred)
+nrmse = rmse / (y_test.max() - y_test.min())
+variance = np.var(y_test)  # Variance of the original target variable
+nmse = mse / variance  # Normalized MSE
+mad = np.mean(np.abs(y_test - y_pred))
+
+# Calculate MAPE (Mean Absolute Percentage Error)
+mape = np.mean(np.abs((y_test - y_pred) / y_test)) * 100
+
+
+# Print the metrics
+print(f'RMSE: {rmse:.4f}')
+print(f'MSE: {mse:.4f}')  # Added MSE
+print(f'R²: {r2:.4f}')
+print(f'MAE: {mae:.4f}')
+print(f'NRMSE: {nrmse:.4f}')
+print(f'Normalized MSE (nMSE): {nmse:.4f}')
+print(f'MAD: {mad:.4f}')
+print(f'MAPE: {mape:.4f}%')
